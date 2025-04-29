@@ -20,7 +20,8 @@ from abc import ABC
 import logging
 
 from genesis.exceptions import UnconnectedError, ConnectionError
-from genesis.parser import parse_headers, ESLEvent
+from genesis.events import ESLEvent
+from genesis.parser import parse_headers
 from genesis.logger import logger, TRACE_LEVEL_NUM
 
 
@@ -278,7 +279,7 @@ class Protocol(ABC):
             self.handlers.setdefault(key, list()).remove(handler)
 
     async def send(self, cmd: str) -> ESLEvent:
-        """Method used to send commands to or freeswitch."""
+        """Method used to send commands to freeswitch."""
         if not self.is_connected:
             raise UnconnectedError()
 
