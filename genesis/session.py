@@ -83,11 +83,13 @@ class Session(Protocol):
         if not target_channel_uuid:
             target_channel_uuid = event.get("Unique-ID")
 
+        logger.trace(f"Session._dispatch: Event Target UUID: {target_channel_uuid}, Event-Name: {event.get('Event-Name')}, Content-Type: {event.get('Content-Type')}. Current self.channel_a: {self.channel_a.uuid if self.channel_a else 'None'}")
+
         if not target_channel_uuid:
             # Event is not related to a specific channel (e.g., general command reply, non-channel event)
             event_name_for_log = event.get("Event-Name") or event.get("Content-Type")
             logger.trace(
-                f"Session: Received non-channel specific event or command reply: {event_name_for_log}"
+                f"Session._dispatch: Received non-channel specific event or command reply: {event_name_for_log}. Returning."
             )
             return
 
@@ -95,49 +97,64 @@ class Session(Protocol):
 
         if not channel_instance:
             # Event for an unknown channel
-            if event.get("Event-Name") in ["CHANNEL_CREATE", "CHANNEL_DATA"]:
-                logger.info(f"Session: Creating new channel instance for UUID {target_channel_uuid}.")
+
+            # For Outbound ESL, the initial 'connect' reply (a command/reply event)
+            # should establish channel_a. It contains channel variables but isn't a
+            # 'CHANNEL_CREATE' or 'CHANNEL_DATA' event by Event-Name.
+            is_initial_connect_reply = (
+                self.channel_a is None and  # No A-leg established yet
+                event.get("Content-Type") == "command/reply" and  # It's a command reply
+                "Channel-State" in event and # It contains channel information (heuristic)
+                target_channel_uuid is not None # It has a UUID
+            )
+            logger.trace(f"Session._dispatch: Calculated is_initial_connect_reply = {is_initial_connect_reply} (self.channel_a is None: {self.channel_a is None}, Content-Type is command/reply: {event.get('Content-Type') == 'command/reply'}, Channel-State in event: {'Channel-State' in event}, target_channel_uuid is not None: {target_channel_uuid is not None})")
+
+            if event.get("Event-Name") in ["CHANNEL_CREATE", "CHANNEL_DATA"] or is_initial_connect_reply:
+                logger.info(f"Session._dispatch: CREATING new channel instance for UUID {target_channel_uuid} (Type: {event.get('Event-Name') or event.get('Content-Type')}).")
 
                 channel_instance = Channel(uuid=target_channel_uuid, session=self)
                 self.channels[target_channel_uuid] = channel_instance
 
                 if not self.myevents:
                     try:
-                        logger.debug(f"Session: Adding filter for new channel {target_channel_uuid} (myevents=False).")
-                        await self.send(f"filter Unique-ID {target_channel_uuid}")
+                        # Defer filtering for the initial A-leg; Outbound.handler manages its event subscriptions.
+                        if not is_initial_connect_reply:
+                            logger.debug(f"Session._dispatch: Adding filter for new channel {target_channel_uuid} (myevents=False).")
+                            await self.send(f"filter Unique-ID {target_channel_uuid}")
                     except Exception as e:
-                        logger.error(f"Session: Failed to send filter command for new channel {target_channel_uuid}: {e}")
+                        logger.error(f"Session._dispatch: Failed to send filter command for new channel {target_channel_uuid}: {e}")
 
                 if self.channel_a is None:
                     self.channel_a = channel_instance
                     logger.info(
-                        f"Session: Channel {target_channel_uuid} identified as A-leg."
+                        f"Session._dispatch: Channel {target_channel_uuid} assigned as A-leg. self.channel_a is now {self.channel_a.uuid if self.channel_a else 'None'}."
                     )
                 else:
                     logger.info(
-                        f"Session: Channel {target_channel_uuid} identified as B-leg (or subsequent leg)."
+                        f"Session._dispatch: Channel {target_channel_uuid} identified as B-leg (or subsequent leg). self.channel_a ({self.channel_a.uuid if self.channel_a else 'None'}) already set."
                     )
             else:
                 # Event for an unmanaged UUID that is not a designated creation trigger.
                 event_description = event.get('Event-Name', event.get('Content-Type', 'Unknown Event'))
                 logger.debug(
-                    f"Session: Received event '{event_description}' for unmanaged channel UUID '{target_channel_uuid}'. "
+                    f"Session._dispatch: Received event '{event_description}' for unmanaged channel UUID '{target_channel_uuid}'. "
                     f"Not a designated creation trigger. Ignoring for channel creation."
                 )
+                logger.warn(f"Session._dispatch: Received event was not a creation trigger for unknown UUID. channel_instance is {channel_instance}. self.channel_a is {self.channel_a.uuid if self.channel_a else 'None'}.")
                 return
 
         if channel_instance: # Known channel
             await channel_instance._handle_event(event)
             logger.trace(
-                f"Session: Dispatched event {event.get('Event-Name', 'N/A')} to channel {target_channel_uuid}."
+                f"Session._dispatch: Dispatched event {event.get('Event-Name', 'N/A')} to channel {target_channel_uuid}."
             )
 
             # Handle channel destruction after it has processed its own DESTROY event
             if event.get("Event-Name") == "CHANNEL_DESTROY":
-                logger.info(f"Session: Channel {target_channel_uuid} destroyed. Removing from session.")
+                logger.info(f"Session._dispatch: Channel {target_channel_uuid} destroyed. Removing from session.")
                 del self.channels[target_channel_uuid]
                 if self.channel_a and self.channel_a.uuid == target_channel_uuid:
-                    logger.info(f"Session: Channel A ({target_channel_uuid}) was destroyed.")
+                    logger.info(f"Session._dispatch: Channel A ({target_channel_uuid}) was destroyed.")
                     self.channel_a = None
 
     async def _awaitable_complete_command(self, event_uuid: str, channel_uuid: Optional[str], result: CommandResult) -> Event:

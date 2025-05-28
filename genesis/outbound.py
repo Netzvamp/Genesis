@@ -15,9 +15,6 @@ import socket
 
 from genesis.logger import logger
 from genesis.session import Session
-from genesis.channel import Channel
-from genesis.events import ESLEvent
-from genesis.enums import ChannelState
 
 
 class Outbound:
@@ -95,14 +92,15 @@ class Outbound:
         server: Outbound, reader: StreamReader, writer: StreamWriter
     ) -> None:
         """Method used to process new connections."""
+        logger.debug(f"Outbound.handler: New connection received from {writer.get_extra_info('peername')}")
         session = Session(reader, writer, myevents=server.myevents)
         session_id = None
-        
+
         try:
             async with session:
-                logger.debug("Send 'connect' command to FreeSWITCH to accept the call.")
+                logger.debug(f"Outbound.handler: Session {session} started. Sending 'connect' command.")
                 connect_event_context = await session.send("connect")
-
+                logger.trace(f"Outbound.handler: 'connect' command sent. Received context: {connect_event_context}")
                 session.context = connect_event_context
 
                 await session._dispatch_event_to_channels(connect_event_context)
@@ -110,12 +108,12 @@ class Outbound:
                 if not session.channel_a:
                     logger.error("A-leg channel initialization failed via dispatch. Aborting handler.")
                     return
-                
+
                 # Store the session in active_sessions using the A-leg UUID as key
                 session_id = session.channel_a.uuid
                 server.active_sessions[session_id] = session
-                logger.info(f"Added session {session_id} to active sessions. Total active: {len(server.active_sessions)}")
-                
+                logger.info(f"Outbound.handler: Added session {session_id} to active_sessions. Total active: {len(server.active_sessions)}")
+
                 if server.myevents:
                     logger.debug("Send command to receive all call events (myevents).")
                     await session.send("myevents")
@@ -128,7 +126,7 @@ class Outbound:
                     await session.send("linger")
                     session.linger = True
 
-                logger.debug("Starting application handler for the session.")
+                logger.debug(f"Outbound.handler: Starting application handler server.app for session {session_id}.")
                 try:
                     await server.app(session)
                 except Exception as e:
@@ -141,12 +139,16 @@ class Outbound:
                         except Exception as hangup_err:
                             logger.error(f"Error during hangup after application error: {hangup_err}")
                 finally:
-                    logger.debug("Application handler finished.")
+                    logger.debug(f"Outbound.handler: Application handler for session {session_id} finished (finally block).")
+        except Exception as e_outer_handler:
+            logger.error(f"Outbound.handler: Outer exception for session {session_id if session_id else 'unknown'}: {e_outer_handler}", exc_info=True)
+            # Re-raise if necessary, or ensure cleanup
         finally:
             # Remove the session from active_sessions when done
             if session_id and session_id in server.active_sessions:
                 del server.active_sessions[session_id]
-                logger.info(f"Removed session {session_id} from active sessions. Remaining active: {len(server.active_sessions)}")
+                logger.info(f"Outbound.handler: Removed session {session_id} from active_sessions. Remaining active: {len(server.active_sessions)}")
+            logger.info(f"Outbound.handler: Finished processing connection from {writer.get_extra_info('peername')}. Session ID was: {session_id if session_id else 'N/A'}")
 
     def get_active_sessions(self) -> List[Session]:
         """
