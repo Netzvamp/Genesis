@@ -74,3 +74,13 @@ dmypy.json
 test
 .vscode
 .idea/
+.tool-versions
+/docs/public/
+/docs/resources/_gen/
+/docs/assets/jsconfig.json
+/docs/hugo_stats.json
+/docs/hugo.exe
+/docs/hugo.darwin
+/docs/hugo.linux
+/docs/.hugo_build.lock
+

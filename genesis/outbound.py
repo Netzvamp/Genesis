@@ -7,8 +7,10 @@ ESL implementation used for outgoing connections on freeswitch.
 
 from __future__ import annotations
 
+
 from asyncio import StreamReader, StreamWriter, start_server
 from typing import Union, Dict, List, Optional
+
 from collections.abc import Callable, Coroutine
 from functools import partial
 import socket
