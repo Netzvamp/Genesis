@@ -1,8 +1,6 @@
 ---
-menu:
-  main:
-    identifier: "install"
-    weight: 0
+title: Install guide
+weight: 0
 ---
 # Install Genesis
 
@@ -14,4 +12,4 @@ Within the environment you want to use to work, use the following command to ins
 pip install genesis 
 ```
 
-Genesis is now installed. Go to the [documentation](https://github.com/Otoru/Genesis/wiki) overview to start to work.
+Genesis is now installed. Visit the [documentation homepage](/Genesis) to start exploring the available guides.
