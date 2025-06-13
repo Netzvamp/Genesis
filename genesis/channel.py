@@ -582,13 +582,18 @@ class Channel:
             response = await session.send(originate_cmd)
             
             # Check for errors in the response
-            if response.body:
+            response_body = None
+            if hasattr(response, 'body') and response.body:
                 response_body = response.body.strip()
+            elif response.get("Reply-Text"):
+                response_body = response.get("Reply-Text").strip()
+
+            if response_body:
                 if response_body.startswith("-ERR") or "ERROR" in response_body.upper():
                     error_msg = response_body
                     raise OriginateError(f"Originate command failed: {error_msg}", destination, vars_dict)
                 elif not response_body.startswith("+OK"):
-                    OriginateError(f"Unexpected originate response: {response_body}", destination, vars_dict)
+                    raise OriginateError(f"Unexpected originate response: {response_body}", destination, vars_dict)
 
             session.channels[new_uuid] = new_channel
             logger.info(f"Successfully initiated new channel {new_uuid}")
