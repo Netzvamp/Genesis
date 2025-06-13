@@ -346,24 +346,14 @@ class Channel:
         
         # Handle the case where target is already a Channel object
         if isinstance(target, Channel):
-            # Bridge to an existing channel using uuid_bridge API command
-            logger.info(f"Channel {self.uuid} bridging to existing channel [{target.uuid}] using uuid_bridge API")
+            # Bridge to an existing channel using uuid_bridge bgapi command
+            logger.info(f"Channel {self.uuid} bridging to existing channel [{target.uuid}] using uuid_bridge bgapi")
 
-            bridge_cmd = f"api uuid_bridge {self.uuid} {target.uuid}"
-            response = await self.session.send(bridge_cmd)
-
-            result = CommandResult(
-                initial_event=response,
-                channel_uuid=self.uuid,
-                channel=self,
-                command="api",
-                application="uuid_bridge",
-                data=f"{self.uuid} {target.uuid}"
-            )
+            bridge_cmd = f"uuid_bridge {self.uuid} {target.uuid}"
+            result = await self.session.bgapi_execute(bridge_cmd)
             
-            # API commands don't have CHANNEL_EXECUTE_COMPLETE events
-            # so we mark the result as complete immediately
-            result.set_complete(response)
+            # Wait for the background job to complete
+            await result
             
             # Only return the CommandResult when target is a Channel
             return result
@@ -578,28 +568,33 @@ class Channel:
             full_destination = f"{destination} &{application_after}"
 
             timeout_str = f"timeout={timeout}" if timeout else ""
-            originate_cmd = f"api originate {build_variable_string(vars_dict)}{full_destination} {timeout_str}"
-            response = await session.send(originate_cmd)
+            originate_cmd = f"originate {build_variable_string(vars_dict)}{full_destination} {timeout_str}"
             
-            # Check for errors in the response
-            response_body = None
-            if hasattr(response, 'body') and response.body:
-                response_body = response.body.strip()
-            elif response.get("Reply-Text"):
-                response_body = response.get("Reply-Text").strip()
-
-            if response_body:
+            # Use bgapi instead of api for non-blocking originate
+            logger.debug(f"Executing bgapi originate command: {originate_cmd}")
+            result = await session.bgapi_execute(originate_cmd)
+            
+            # Wait for the background job to complete
+            logger.debug(f"Waiting for bgapi originate completion for channel {new_uuid}")
+            await result
+            
+            # Check for errors in the completion event
+            if result.completion_event and result.response:
+                response_body = result.response.strip()
+                logger.debug(f"Originate bgapi response: {response_body}")
+                
                 if response_body.startswith("-ERR") or "ERROR" in response_body.upper():
                     error_msg = response_body
+                    logger.error(f"Originate bgapi failed: {error_msg}")
                     raise OriginateError(f"Originate command failed: {error_msg}", destination, vars_dict)
                 elif not response_body.startswith("+OK"):
-                    raise OriginateError(f"Unexpected originate response: {response_body}", destination, vars_dict)
-
+                    logger.warning(f"Unexpected originate bgapi response: {response_body}")
+                    # Don't fail here as some responses might be valid but not start with +OK
+            
             session.channels[new_uuid] = new_channel
-            logger.info(f"Successfully initiated new channel {new_uuid}")
+            logger.info(f"Successfully initiated new channel {new_uuid} via bgapi")
             
             if new_channel.is_gone:
-                # Channel was created but quickly hung up
                 logger.error(f"Channel {new_uuid} was created but disconnected immediately")
                 raise OriginateError(f"Channel {new_uuid} disconnected immediately", destination, vars_dict)
             
@@ -609,12 +604,10 @@ class Channel:
             if new_uuid in session.channels:
                 del session.channels[new_uuid]
             
-            # If it's already an OriginateError, re-raise it
             if isinstance(e, OriginateError):
                 raise
                 
-            # Otherwise wrap in an OriginateError
-            logger.error(f"Failed to create channel: {str(e)}")
+            logger.error(f"Failed to create channel via bgapi: {str(e)}")
             raise OriginateError(f"Failed to create channel: {str(e)}", destination, vars_dict)
             
     async def unbridge(self, destination: Optional[str] = None, park: bool = True) -> CommandResult:
@@ -648,18 +641,10 @@ class Channel:
         
         logger.info(log_msg)
 
-        response = await self.session.send(f"api uuid_transfer {self.uuid} {both_flag} {transfer_target} inline")
+        transfer_cmd = f"uuid_transfer {self.uuid} {both_flag} {transfer_target} inline"
+        result = await self.session.bgapi_execute(transfer_cmd)
         
-        # Create a CommandResult for the operation
-        result = CommandResult(
-            initial_event=response,
-            channel_uuid=self.uuid,
-            channel=self,
-            command="api",
-            application="uuid_transfer",
-            data=f"{self.uuid} {both_flag} {transfer_target}"
-        )
+        # Wait for the background job to complete
+        await result
         
-        # Mark as completed immediately as we don't get EXECUTE_COMPLETE for API commands
-        result.set_complete(response)
         return result

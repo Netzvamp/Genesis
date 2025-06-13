@@ -123,6 +123,12 @@ class Outbound:
                     logger.debug("We don't use 'myevents', send command to receive all events for this session (events plain ALL).")
                     await session.send("events plain ALL")
 
+                    # Add a specific filter for the A-leg UUID. This ensures that even if other filters
+                    # are added later (e.g., for a B-leg), we continue to receive events for the A-leg.
+                    if session.channel_a:
+                        logger.debug(f"Adding event filter for A-leg channel {session.channel_a.uuid}")
+                        await session.send(f"filter Unique-ID {session.channel_a.uuid}")
+
                 if server.linger:
                     logger.debug("Send linger command to FreeSWITCH.")
                     await session.send("linger")

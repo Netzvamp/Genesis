@@ -19,6 +19,7 @@ from genesis.events import ESLEvent
 from genesis.logger import logger
 from genesis.channel import Channel
 from genesis.command import CommandResult
+from genesis.bgapi import BackgroundAPI
 
 
 class Session(Protocol):
@@ -63,6 +64,7 @@ class Session(Protocol):
         self.myevents: bool = myevents
         self.linger: bool = True
         self.channel_a: Optional['Channel'] = None
+        self.bgapi = BackgroundAPI(self)
 
         # Register the dispatcher for all events
         self.on("*", self._dispatch_event_to_channels)
@@ -500,3 +502,23 @@ class Session(Protocol):
             timeout=timeout,
             application_after=application_after
         )
+        
+    async def bgapi_execute(self, cmd: str, job_uuid: Optional[str] = None):
+        """
+        Execute a background API command.
+        
+        This is a convenience method that delegates to the BackgroundAPI instance.
+        
+        Args:
+            cmd: The API command to execute (without 'bgapi' prefix)
+            job_uuid: Optional custom Job-UUID. If not provided, one will be generated
+            
+        Returns:
+            BackgroundJobResult: An object that can be awaited for completion
+            
+        Example:
+            result = await session.bgapi_execute("originate sofia/gateway/mygw/1234 &park()")
+            await result  # Wait for completion
+            print(result.response)  # Get the result
+        """
+        return await self.bgapi.execute(cmd, job_uuid)

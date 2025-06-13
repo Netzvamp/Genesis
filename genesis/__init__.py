@@ -17,6 +17,7 @@ from .enums import ChannelState, CallState
 from .channel import Channel
 from .utils import build_variable_string
 from .command import CommandResult
+from .bgapi import BackgroundAPI, BackgroundJobResult
 
 
 __all__ = [
@@ -51,5 +52,7 @@ __all__ = [
     "Channel",
     "build_variable_string",
     "CommandResult",
+    "BackgroundAPI",
+    "BackgroundJobResult",
 ]
 __version__ = importlib.metadata.version("genesis")

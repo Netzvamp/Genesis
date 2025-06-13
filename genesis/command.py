@@ -109,12 +109,21 @@ class CommandResult:
     @property
     def response(self) -> Optional[str]:
         """
-        Returns the Application-Response value from the complete event, if available.
-        Returns None if the command hasn't completed or doesn't have a response.
+        Returns the response from the completed command.
+        
+        For bgapi commands, this returns the body of the BACKGROUND_JOB event.
+        For execute commands, this returns the Application-Response value.
+        Returns None if the command hasn't completed.
         """
         if not self.is_completed or not self.complete_event:
             return None
-        return self.complete_event.get("Application-Response")
+        
+        if self.command == "bgapi":
+            # For background jobs, the response is in the body
+            return getattr(self.complete_event, 'body', None)
+        else:
+            # For execute commands, use Application-Response
+            return self.complete_event.get("Application-Response")
     
     def set_complete(self, event: ESLEvent) -> None:
         """Mark the command as complete with the given event."""
@@ -165,3 +174,4 @@ class CommandResult:
     def __await__(self):
         """Make the object awaitable directly."""
         return self.wait().__await__()
+    
