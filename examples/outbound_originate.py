@@ -9,7 +9,7 @@ Your dialplan should have an entry similar to this:
 """
 import os
 import asyncio
-from genesis import Outbound, Session, CallState, ChannelState
+from genesis import Outbound, Session, CallState
 from genesis.exceptions import OperationInterruptedException, OriginateError
 from genesis.logger import logger
 
@@ -42,6 +42,7 @@ async def handler(session: Session):
                 },
                 timeout=10
             )
+            logger.info(f"After originate {b_leg_destination}")
             
             # Check explicitly if the channel was successfully created
             if channel_b is None or channel_b.is_gone:

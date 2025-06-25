@@ -80,13 +80,15 @@ class ConditionalRichHandlerFormatter(logging.Formatter):
             file_path = Path(record.pathname)
             file_uri = file_path.as_uri()
 
+            file_uri = file_uri[8:]
+
             # Ensure drive letter is lowercase for compatibility (e.g., file:///c:/...)
             # Path.as_uri() on Windows produces file:///C:/...
             # Check if the URI matches the pattern file:///X:/... where X is an uppercase letter
             if len(file_uri) > 8 and file_uri[7:9] == ':/' and file_uri[6].isupper():
                 file_uri = file_uri[:6] + file_uri[6].lower() + file_uri[7:]
             
-            return f"{file_uri}:{record.lineno}\n{formatted_message}"
+            return f"{formatted_message}\n{file_path}:{record.lineno}"
         return formatted_message
 
 
