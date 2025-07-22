@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -6,7 +7,7 @@ from genesis.channel import Channel
 from genesis.enums import ChannelState, CallState
 from genesis.events import ESLEvent
 from genesis.exceptions import SessionGoneAway, OriginateError
-from genesis.command import CommandResult
+from genesis.results import CommandResult, BackgroundJobResult
 
 
 class TestChannel:
@@ -50,7 +51,6 @@ class TestChannel:
             lock=False,
             uuid=channel.uuid,
             app_event_uuid=None,
-            block=False,
             headers=None
         )
         assert result == mock_result
@@ -68,7 +68,6 @@ class TestChannel:
             lock=False,
             uuid=channel.uuid,
             app_event_uuid=None,
-            block=False,
             headers=None
         )
 
@@ -129,34 +128,61 @@ class TestChannel:
             assert bleg_channel.uuid == bleg_uuid
             assert bleg_channel in mock_session.channels.values()
 
-    async def test_channel_bridge_to_existing_channel(self, channel):
+    async def test_channel_bridge_to_existing_channel(self, channel, background_job_result_factory):
         target_channel = Channel(str(uuid4()), channel.session)
-        mock_response = ESLEvent({"Reply-Text": "+OK"})
-        channel.session.send.return_value = mock_response
-        
+    
+        # Mock the BackgroundJobResult that bgapi_execute returns.
+        mock_bg_result = background_job_result_factory(is_successful=True)
+    
+        # session.bgapi_execute is an async method that returns the awaitable result
+        channel.session.bgapi_execute = AsyncMock(return_value=mock_bg_result)
+    
+        # Act
         result = await channel.bridge(target_channel)
-        
-        channel.session.send.assert_called_once()
-        assert result.is_completed
+    
+        # Assert
+        channel.session.bgapi_execute.assert_called_once_with(
+            f"uuid_bridge {channel.uuid} {target_channel.uuid}"
+        )
+    
+        assert result is mock_bg_result
+    
+        # The caller would then await this result
+        awaited_result = await result
+        assert awaited_result is mock_bg_result
+        assert awaited_result.is_successful
 
-    async def test_channel_originate_success(self, mock_session):
+    async def test_channel_originate_success(self, mock_session, background_job_result_factory):
         new_uuid = str(uuid4())
-        mock_response = ESLEvent({"Reply-Text": "+OK", "body": "+OK"})
-        mock_session.send.return_value = mock_response
-        
+    
+        # Mock the BackgroundJobResult that bgapi_execute returns
+        mock_bg_result = background_job_result_factory(
+            is_successful=True,
+            response="+OK some-uuid"
+        )
+    
+        # Mock session.bgapi_execute, which is what Channel.originate uses
+        mock_session.bgapi_execute = AsyncMock(return_value=mock_bg_result)
+    
         with patch('genesis.channel.uuid4', return_value=new_uuid):
             channel = await Channel.originate(
                 session=mock_session,
                 destination="user/1000"
             )
-            
+    
             assert channel.uuid == new_uuid
             assert new_uuid in mock_session.channels
+            mock_session.bgapi_execute.assert_called_once()
 
-    async def test_channel_originate_failure(self, mock_session):
-        mock_response = ESLEvent({"Reply-Text": "-ERR", "body": "-ERR INVALID_DESTINATION"})
-        mock_session.send.return_value = mock_response
-        
+    async def test_channel_originate_failure(self, mock_session, background_job_result_factory):
+        # Mock bgapi_execute to return a failed result
+        mock_bg_result = background_job_result_factory(
+            is_successful=False,
+            response="-ERR INVALID_DESTINATION"
+        )
+    
+        mock_session.bgapi_execute = AsyncMock(return_value=mock_bg_result)
+    
         with pytest.raises(OriginateError):
             await Channel.originate(
                 session=mock_session,
@@ -167,7 +193,7 @@ class TestChannel:
         mock_result = CommandResult(ESLEvent(), channel=channel)
         channel.session.sendmsg.return_value = mock_result
         
-        result = await channel.playback("/tmp/test.wav", block=False)
+        result = await channel.playback("/tmp/test.wav")
         
         channel.session.sendmsg.assert_called_once_with(
             command="execute",
@@ -176,7 +202,6 @@ class TestChannel:
             lock=False,
             uuid=channel.uuid,
             app_event_uuid=None,
-            block=False,
             headers=None
         )
 
@@ -193,7 +218,6 @@ class TestChannel:
             lock=False,
             uuid=channel.uuid,
             app_event_uuid=None,
-            block=True,
             headers=None
         )
 
@@ -210,7 +234,6 @@ class TestChannel:
             lock=False,
             uuid=channel.uuid,
             app_event_uuid=None,
-            block=False,
             headers=None
         )
 
@@ -226,14 +249,26 @@ class TestChannel:
         
         assert result is None
 
-    async def test_channel_unbridge(self, channel):
-        mock_response = ESLEvent({"Reply-Text": "+OK"})
-        channel.session.send.return_value = mock_response
-        
+    async def test_channel_unbridge(self, channel, background_job_result_factory):
+        # Mock the BackgroundJobResult that bgapi_execute returns
+        mock_bg_result = background_job_result_factory(is_successful=True)
+    
+        # session.bgapi_execute is an async method that returns the awaitable result
+        channel.session.bgapi_execute = AsyncMock(return_value=mock_bg_result)
+    
+        # Act
         result = await channel.unbridge(destination="1000", park=False)
-        
-        channel.session.send.assert_called_once()
-        assert result.is_completed
+    
+        # Assert
+        expected_cmd = f"uuid_transfer {channel.uuid}  1000 inline"
+        channel.session.bgapi_execute.assert_called_once_with(expected_cmd)
+    
+        assert result is mock_bg_result
+    
+        # Await the result and check properties
+        awaited_result = await result
+        assert awaited_result is mock_bg_result
+        assert awaited_result.is_successful
 
     async def test_channel_answer(self, channel):
         mock_result = CommandResult(ESLEvent(), channel=channel)
@@ -248,7 +283,6 @@ class TestChannel:
             lock=False,
             uuid=channel.uuid,
             app_event_uuid=None,
-            block=False,
             headers=None
         )
 
@@ -265,6 +299,5 @@ class TestChannel:
             lock=False,
             uuid=channel.uuid,
             app_event_uuid=None,
-            block=False,
             headers=None
         )

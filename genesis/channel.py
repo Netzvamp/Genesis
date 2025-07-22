@@ -16,7 +16,7 @@ from .events import ESLEvent
 from .exceptions import SessionGoneAway, OriginateError
 from .logger import logger
 from .utils import build_variable_string
-from .command import CommandResult
+from .results import BackgroundJobResult, CommandResult
 
 if TYPE_CHECKING:
     from .session import Session
@@ -221,7 +221,6 @@ class Channel:
         data: Optional[str] = None,
         lock: bool = False,
         app_event_uuid: Optional[str] = None,
-        block: bool = False,
         headers: Optional[Dict[str, str]] = None,
     ) -> CommandResult:
         """Internal helper to send commands via the associated protocol."""
@@ -233,7 +232,6 @@ class Channel:
             lock=lock,
             uuid=self.uuid,
             app_event_uuid=app_event_uuid,
-            block=block,
             headers=headers,
         )
 
@@ -241,31 +239,26 @@ class Channel:
         self,
         application: str,
         data: Optional[str] = None,
-        block: bool = False,
         app_event_uuid: Optional[str] = None,
         headers: Optional[Dict[str, str]] = None,
     ) -> CommandResult:
         """
-        Executes a dialplan application on this channel.
+        Executes a dialplan application on this channel and waits for it to complete.
 
         Args:
             application: The application name (e.g., 'playback', 'bridge').
             data: Arguments for the application.
-            block: If True, wait for CHANNEL_EXECUTE_COMPLETE before returning.
-                   Only fully supported for Outbound sessions.
             app_event_uuid: Custom UUID for tracking execute events.
             headers: Additional ESL headers for the sendmsg command.
 
         Returns:
-            CommandResult: An object representing the command execution result.
-            For blocking calls, the result will already be complete.
-            For non-blocking calls, the result can be awaited later.
+            CommandResult: An object representing the completed command execution.
+            To run an application in the background, use `asyncio.create_task()`.
         """
         return await self._sendmsg(
             command="execute",
             application=application,
             data=data,
-            block=block,
             app_event_uuid=app_event_uuid,
             headers=headers,
         )
@@ -322,11 +315,11 @@ class Channel:
         self,
         target: Union[str, 'Channel'],
         call_variables: Optional[Dict[str, str]] = None,
-        block: bool = True,
-    ) -> Union[Tuple[CommandResult, Channel], CommandResult]:
+    ) -> Union[Tuple[CommandResult, Channel], BackgroundJobResult]:
         """
         Bridges this channel to another target (e.g., endpoint, dialplan extension) or directly to another Channel.
         Creates a B-leg channel and sets up proper event filtering when target is a dialstring.
+        This method waits for the bridge to complete. To run in the background, use `asyncio.create_task()`.
 
         Args:
             target: The bridge target. Can be either:
@@ -335,12 +328,10 @@ class Channel:
             call_variables: Optional dictionary of variables to set for the B-leg.
                             'origination_uuid' will be automatically added/overridden.
                             Only used when target is a string (dialstring).
-            block: If True, wait for the bridge to complete (or fail).
-                   This typically means waiting for CHANNEL_EXECUTE_COMPLETE for the bridge app.
 
         Returns:
             - When target is a string: Tuple[CommandResult, Channel] with the command result and the newly created B-leg channel
-            - When target is a Channel: Just the CommandResult, as no new channel is created
+            - When target is a Channel: BackgroundJobResult that can be awaited for completion
         """
         self._check_if_gone()
         
@@ -352,10 +343,8 @@ class Channel:
             bridge_cmd = f"uuid_bridge {self.uuid} {target.uuid}"
             result = await self.session.bgapi_execute(bridge_cmd)
             
-            # Wait for the background job to complete
-            await result
-            
-            # Only return the CommandResult when target is a Channel
+            # The result is a BackgroundJobResult, which is awaitable.
+            # The caller is responsible for awaiting it.
             return result
 
         bleg_uuid = str(uuid4())
@@ -402,7 +391,6 @@ class Channel:
         response = await self.execute(
             application="bridge",
             data=bridge_target_with_vars,
-            block=block,
             app_event_uuid=bridge_app_uuid
         )
         
@@ -410,44 +398,36 @@ class Channel:
         # Return a tuple with CommandResult and new Channel when target is a dialstring
         return response, bleg_channel
 
-    async def playback(self, path: str, block: bool = True) -> CommandResult:
+    async def playback(self, path: str) -> CommandResult:
         """
-        Plays an audio file on the channel.
+        Plays an audio file on the channel and waits for it to complete.
+
+        To play audio in the background without waiting for completion, use:
+        `asyncio.create_task(channel.playback(path))`
 
         Args:
             path: The path to the audio file (accessible by FreeSWITCH).
-            block: If True, wait for playback to complete.
 
         Returns:
-            CommandResult: An object representing the command execution result.
-            For blocking calls, the result will already be complete.
-            For non-blocking calls, the result can be awaited later.
+            CommandResult: An object representing the completed command execution.
         """
-        return await self.execute("playback", path, block=block)
+        return await self.execute("playback", path)
         
-    async def silence(self, ms: int, block: bool = True) -> CommandResult:
+    async def silence(self, ms: int) -> CommandResult:
         """
-        Play silence for specified duration.
+        Play silence for a specified duration and wait for it to complete.
+
+        To play silence in the background, use `asyncio.create_task()`.
 
         Args:
-            ms: Duration of silence in milliseconds
-            block: If True, wait for playback completion before returning
+            ms: Duration of silence in milliseconds.
 
         Returns:
-            CommandResult: An object representing the command execution result.
-            For blocking calls, the result will already be complete.
-            For non-blocking calls, the result can be awaited later.
-
-        Examples:
-            # Play 2 seconds of silence
-            await channel.silence(2000)
-
-            # Play silence without blocking
-            await channel.silence(1000, block=False)
+            CommandResult: An object representing the completed command execution.
         """
-        logger.debug(f"Channel {self.uuid} playing {ms}ms of silence (block={block})")
+        logger.debug(f"Channel {self.uuid} playing {ms}ms of silence")
         path = f"silence_stream://{ms}"
-        return await self.playback(path, block=block)
+        return await self.playback(path)
 
     async def say(
         self,
@@ -457,18 +437,27 @@ class Channel:
         kind: str = "NUMBER",
         method: str = "pronounced",
         gender: str = "FEMININE",
-        block=True,
     ) -> CommandResult:
         """
-        Uses the 'say' application to speak text.
-        
+        Uses the 'say' application to speak text and waits for completion.
+
+        To run this in the background, use `asyncio.create_task()`.
+
+        Args:
+            text: The text to be spoken.
+            module: The say module to use (e.g., 'en').
+            lang: The language within the module.
+            kind: The type of text (e.g., 'NUMBER', 'TEXT').
+            method: The method of saying (e.g., 'pronounced').
+            gender: The gender of the voice.
+
         Returns:
-            CommandResult: An object representing the command execution result.
+            CommandResult: An object representing the completed command execution.
         """
         if lang:
             module += f":{lang}"
         arguments = f"{module} {kind} {method} {gender} {text}"
-        return await self.execute("say", arguments, block=block)
+        return await self.execute("say", arguments)
 
     async def play_and_get_digits(
         self,
@@ -483,11 +472,12 @@ class Channel:
         regexp: Optional[str] = None, # Regex to validate input
         digit_timeout: Optional[int] = None, # Timeout after last digit
         transfer_on_failure: Optional[str] = None,
-        block: bool = True,
     ) -> CommandResult:
         """
-        Executes the 'play_and_get_digits' application.
-        
+        Executes the 'play_and_get_digits' application and waits for completion.
+
+        To run this in the background, use `asyncio.create_task()`.
+
         Returns:
             CommandResult: An object representing the command execution result.
         """
@@ -498,7 +488,7 @@ class Channel:
             invalid_file, var_name, regexp, digit_timeout, transfer_on_failure
         ]
         arguments = " ".join(map(formatter, ordered_args)).strip()
-        return await self.execute("play_and_get_digits", arguments, block=block)
+        return await self.execute("play_and_get_digits", arguments)
 
     async def set_variable(self, name: str, value: str) -> CommandResult:
         """
@@ -511,7 +501,7 @@ class Channel:
         Returns:
             CommandResult: An object representing the command execution result.
         """
-        return await self.execute("set", f"{name}={value}", block=False)
+        return await self.execute("set", f"{name}={value}")
 
     async def get_variable(self, name: str) -> Optional[str]:
         """
@@ -610,7 +600,7 @@ class Channel:
             logger.error(f"Failed to create channel via bgapi: {str(e)}")
             raise OriginateError(f"Failed to create channel: {str(e)}", destination, vars_dict)
             
-    async def unbridge(self, destination: Optional[str] = None, park: bool = True) -> CommandResult:
+    async def unbridge(self, destination: Optional[str] = None, park: bool = True) -> BackgroundJobResult:
         """
         Unbridges this channel from any connected channel and transfers it to a destination.
         
@@ -621,7 +611,7 @@ class Channel:
             park: If True, both channels will be parked after unbridging (default: True)
         
         Returns:
-            CommandResult: An object representing the command execution result
+            BackgroundJobResult: An object that can be awaited for completion
             
         Raises:
             SessionGoneAway: If the channel has been destroyed
@@ -643,8 +633,5 @@ class Channel:
 
         transfer_cmd = f"uuid_transfer {self.uuid} {both_flag} {transfer_target} inline"
         result = await self.session.bgapi_execute(transfer_cmd)
-        
-        # Wait for the background job to complete
-        await result
         
         return result

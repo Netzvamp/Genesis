@@ -9,6 +9,7 @@ Your dialplan should have an entry similar to this:
 """
 import os
 import asyncio
+from asyncio import create_task
 from genesis import Outbound, Session, CallState
 from genesis.exceptions import OperationInterruptedException, OriginateError
 from genesis.logger import logger
@@ -21,6 +22,7 @@ async def handler(session: Session):
     """Handler for the incoming session"""
     try:
         channel_a = session.channel_a
+        channel_b = None  # Initialize B-Leg channel
 
         # A-Leg is the incoming call
         # Answer the incoming call
@@ -28,10 +30,9 @@ async def handler(session: Session):
         logger.info(f"Incoming call (A-Leg) with UUID {channel_a.uuid} answered")
 
         # Play welcome message
-        await channel_a.playback('ivr/ivr-welcome_to_freeswitch', block=True)
+        await channel_a.playback('ivr/ivr-welcome_to_freeswitch')
         logger.info("Welcome message played to A-Leg")
 
-        # While wait music is playing: Originate B-Leg
         try:
             logger.info(f"Attempting to originate B-Leg to {b_leg_destination}")
             channel_b = await session.originate(
@@ -51,7 +52,7 @@ async def handler(session: Session):
             logger.error(f"Error originating B-Leg to '{e.destination}': {e}", exc_info=True)
             logger.debug(f"Originate variables: {e.variables}")
             # Inform A-Leg about the error
-            await channel_a.playback('ivr/ivr-call_cannot_be_completed_as_dialed', block=True)
+            await channel_a.playback('ivr/ivr-call_cannot_be_completed_as_dialed')
             await channel_a.hangup()
 
         # Wait for B-Leg to answer
@@ -70,7 +71,7 @@ async def handler(session: Session):
         logger.info(f"B-Leg channel with UUID {channel_b.uuid} answered")
 
         # Welcome message for B-Leg
-        await channel_b.playback('ivr/ivr-welcome_to_freeswitch', block=True)
+        await channel_b.playback('ivr/ivr-welcome_to_freeswitch')
         logger.info("Welcome message played to B-Leg")
 
         # Bridge A-Leg and B-Leg together
@@ -80,7 +81,7 @@ async def handler(session: Session):
         await channel_a.set_variable("hangup_after_bridge", "false")
         await channel_b.set_variable("hangup_after_bridge", "false")
 
-        await channel_a.bridge(channel_b, block=False)
+        await channel_a.bridge(channel_b)
 
         logger.info("Channels are bridged. Starting 10-second countdown before unbridging...")
         for i in range(10, 0, -1):
@@ -92,17 +93,22 @@ async def handler(session: Session):
         logger.info("Channels unbridged and parked")
 
         logger.info("Playing different audio files on each channel")
-        playback_a = await channel_a.playback('ivr/ivr-you_are_number_one', block=False)
-        playback_b = await channel_b.playback('ivr/ivr-oh_whatever', block=False)
 
-        while not (playback_a.is_completed and playback_b.is_completed):
-            logger.info("Waiting for both playbacks to complete...")
-            await asyncio.sleep(1)
+        playback_tasks = [
+            create_task(channel_a.playback('ivr/ivr-welcome_to_freeswitch'), name="playback_a"),
+            create_task(channel_b.playback('ivr/ivr-you_are_number_one'), name="playback_b")
+        ]
+
+        logger.info("Waiting for both playbacks to complete...")
+
+        for completed_playback in playback_tasks:
+            result = await completed_playback
+            logger.info(f"Fertig - {completed_playback.get_name()} - {result.command} {result.application} {result.data}")
 
         logger.info(f"Both playbacks completed.")
 
         logger.info(f"Reconnecting channel_a ({channel_a.uuid}) with channel_b ({channel_b.uuid})")
-        await channel_a.bridge(channel_b, block=False)
+        await channel_a.bridge(channel_b)
 
         logger.info("Channels re-bridged")
 

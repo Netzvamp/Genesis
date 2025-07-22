@@ -24,6 +24,7 @@ from copy import copy
 import string
 import socket
 
+from genesis.events import ESLEvent
 from genesis.logger import logger as conftest_logger
 conftest_logger.setLevel("DEBUG")
 
@@ -1091,3 +1092,48 @@ async def dialplan(connect, generic) -> Dialplan:
     conftest_logger.debug("PYTEST FIXTURE dialplan - Resumed after YIELD. Ensuring dialplan is stopped.")
     await instance.stop()
     conftest_logger.debug("PYTEST FIXTURE dialplan - instance.stop() called. EXIT.")
+
+
+@pytest.fixture
+def background_job_result_factory():
+    """Factory for creating mock BackgroundJobResult objects for testing."""
+
+    class MockBackgroundJobResult:
+        def __init__(self, is_successful=True, response=None, completion_event=None, exception=None):
+            self.is_successful = is_successful
+            self.response = response
+            self.completion_event = completion_event
+            if self.completion_event is None and response is not None:
+                self.completion_event = ESLEvent({"body": response})
+
+            self.exception = exception
+            self._complete = asyncio.Event()
+
+            if exception:
+                self.is_successful = False
+                self.set_exception(exception)
+            else:
+                self.set_complete(self.completion_event or ESLEvent())
+
+        @property
+        def is_completed(self) -> bool:
+            return self._complete.is_set()
+
+        def set_complete(self, event: ESLEvent) -> None:
+            self.completion_event = event
+            self._complete.set()
+
+        def set_exception(self, exception: Exception) -> None:
+            self.exception = exception
+            self._complete.set()
+
+        async def wait(self):
+            await self._complete.wait()
+            if self.exception:
+                raise self.exception
+            return self
+
+        def __await__(self):
+            return self.wait().__await__()
+
+    return MockBackgroundJobResult

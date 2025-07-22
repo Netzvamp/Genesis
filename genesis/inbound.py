@@ -13,7 +13,7 @@ from genesis.exceptions import ConnectionTimeoutError, AuthenticationError
 from genesis.protocol import Protocol
 from genesis.logger import logger
 from genesis.bgapi import BackgroundAPI
-from genesis.command import CommandResult
+from genesis.results import BackgroundJobResult
 
 
 class Inbound(Protocol):
@@ -73,7 +73,7 @@ class Inbound(Protocol):
         await super().start()
         await self.authenticate()
         
-    async def bgapi_execute(self, cmd: str, job_uuid: Optional[str] = None):
+    async def bgapi_execute(self, cmd: str, job_uuid: Optional[str] = None) -> BackgroundJobResult:
         """
         Execute a background API command.
         

@@ -6,7 +6,7 @@ from uuid import uuid4
 from genesis.session import Session
 from genesis.events import ESLEvent
 from genesis.channel import Channel
-from genesis.command import CommandResult
+from genesis.results import CommandResult
 from genesis.exceptions import OperationInterruptedException
 
 
@@ -84,26 +84,13 @@ class TestSession:
             result = await session.sendmsg(
                 command="execute",
                 application="playback", 
-                data="/tmp/test.wav",
-                block=True
+                data="/tmp/test.wav"
             )
             
             mock_awaitable.assert_called_once()
             mock_event.wait.assert_called_once()
             assert isinstance(result, CommandResult)
 
-    async def test_session_sendmsg_execute_non_blocking(self, session):
-        session.send = AsyncMock(return_value=ESLEvent({"Reply-Text": "+OK"}))
-        
-        result = await session.sendmsg(
-            command="execute",
-            application="playback",
-            data="/tmp/test.wav",
-            block=False
-        )
-        
-        assert isinstance(result, CommandResult)
-        assert not result.is_completed
 
     async def test_session_answer(self, session):
         session.sendmsg = AsyncMock()
@@ -129,10 +116,10 @@ class TestSession:
     async def test_session_playback(self, session):
         session.sendmsg = AsyncMock()
         
-        await session.playback("/tmp/test.wav", block=False)
+        await session.playback("/tmp/test.wav")
         
         session.sendmsg.assert_called_once_with(
-            "execute", "playback", "/tmp/test.wav", block=False
+            "execute", "playback", "/tmp/test.wav"
         )
 
     async def test_session_bridge_delegates_to_channel(self, session):
@@ -152,8 +139,7 @@ class TestSession:
         
         mock_channel.bridge.assert_called_once_with(
             "user/1000", 
-            {"test": "value"}, 
-            True
+            {"test": "value"}
         )
         assert result == mock_result
         assert bleg == mock_bleg
@@ -184,10 +170,10 @@ class TestSession:
     async def test_session_say(self, session):
         session.sendmsg = AsyncMock()
         
-        await session.say("123", module="en", lang="us", block=False)
+        await session.say("123", module="en", lang="us")
         
         expected_args = "en:us NUMBER pronounced FEMININE 123"
-        session.sendmsg.assert_called_once_with("execute", "say", expected_args, block=False)
+        session.sendmsg.assert_called_once_with("execute", "say", expected_args)
 
     async def test_session_play_and_get_digits(self, session):
         session.sendmsg = AsyncMock()

@@ -9,7 +9,7 @@ established between the application and FreeSWITCH in an outbound context.
 from __future__ import annotations
 
 from asyncio import StreamReader, StreamWriter, Queue, Event
-from typing import Optional, Union, Dict, Literal, Tuple
+from typing import Optional, Union, Dict, Literal, Tuple, Any, Coroutine
 from functools import partial
 from pprint import pformat
 from uuid import uuid4
@@ -18,7 +18,7 @@ from genesis.protocol import Protocol
 from genesis.events import ESLEvent
 from genesis.logger import logger
 from genesis.channel import Channel
-from genesis.command import CommandResult
+from genesis.results import CommandResult, BackgroundJobResult
 from genesis.bgapi import BackgroundAPI
 
 
@@ -229,7 +229,6 @@ class Session(Protocol):
         lock: bool = False,
         uuid: Optional[str] = None,
         app_event_uuid: Optional[str] = None,
-        block: bool = False,
         headers: Optional[Dict[str, str]] = None,
     ) -> CommandResult:
         """
@@ -249,15 +248,12 @@ class Session(Protocol):
             app_event_uuid: optional
                 Adds a UUID to the execute command. In the corresponding events (CHANNEL_EXECUTE and
                 CHANNEL_EXECUTE_COMPLETE), the UUID will be in the Application-UUID header.
-            block: optional
-                If true, wait for command completion before returning.
             headers: optional
                 Additional headers to send with the command.
         
         Returns:
-            CommandResult: An object representing the command execution result.
-            For blocking calls, the result will already be complete.
-            For non-blocking calls, the result can be awaited later.
+            CommandResult: An object representing the completed command execution.
+            To run a command in the background, use `asyncio.create_task()`.
         """
         if uuid:
             cmd = f"sendmsg {uuid}"
@@ -300,7 +296,7 @@ class Session(Protocol):
             data=data
         )
 
-        if block and command == "execute":
+        if command == "execute":
             logger.debug(
                 f"Waiting for command completion with Application-UUID: {app_event_uuid} on channel {uuid}"
             )
@@ -309,19 +305,17 @@ class Session(Protocol):
             response = await self.send(cmd)
             result.initial_event = response
             logger.debug(
-                f"Received response of execute command with block: {pformat(response)}"
+                f"Received response of execute command: {pformat(response)}"
             )
             await command_is_complete_or_interrupted.wait()
 
             # The result should now be complete (either success or exception)
             return result
         else:
-            # For non-blocking calls, just send the command and return the result
-            logger.debug(
-                f"Sending command without waiting for completion. Command: {cmd}"
-            )
+            # For non-execute commands, just send the command and complete the result with the command/reply
             response = await self.send(cmd)
             result.initial_event = response
+            result.set_complete(response)
             return result
 
     async def log(
@@ -346,9 +340,20 @@ class Session(Protocol):
         """Hang up the call associated with the session."""
         return await self.sendmsg("execute", "hangup", cause)
 
-    async def playback(self, path: str, block=True) -> CommandResult:
-        """Requests the freeswitch to play an audio."""
-        return await self.sendmsg("execute", "playback", path, block=block)
+    async def playback(self, path: str) -> CommandResult:
+        """
+        Requests the freeswitch to play an audio and waits for it to complete.
+
+        To play audio in the background without waiting for completion, use:
+        `asyncio.create_task(session.playback(path))`
+
+        Args:
+            path: The path to the audio file.
+
+        Returns:
+            CommandResult: An object representing the completed command execution.
+        """
+        return await self.sendmsg("execute", "playback", path)
 
     async def say(
         self,
@@ -358,34 +363,47 @@ class Session(Protocol):
         kind: str = "NUMBER",
         method: str = "pronounced",
         gender: str = "FEMININE",
-        block=True,
     ) -> CommandResult:
-        """The say application will use the pre-recorded sound files to read or say things."""
+        """
+        The say application will use the pre-recorded sound files to read or say things.
+        This method waits for the operation to complete.
+
+        To run this in the background, use `asyncio.create_task()`.
+
+        Args:
+            text: The text to be spoken.
+            module: The say module to use (e.g., 'en').
+            lang: The language within the module.
+            kind: The type of text (e.g., 'NUMBER', 'TEXT').
+            method: The method of saying (e.g., 'pronounced').
+            gender: The gender of the voice.
+
+        Returns:
+            CommandResult: An object representing the completed command execution.
+        """
         if lang:
             module += f":{lang}"
 
         arguments = f"{module} {kind} {method} {gender} {text}"
         logger.debug(f"Arguments used in say command: {arguments}")
-        return await self.sendmsg("execute", "say", arguments, block=block)
+        return await self.sendmsg("execute", "say", arguments)
 
     async def bridge(
         self,
         channel_a: Channel,
         target: str,
         call_variables: Optional[Dict[str, str]] = None,
-        block: bool = True,
-    ) -> Tuple[CommandResult, Optional[Channel]]:
+    ) -> Tuple[CommandResult, Channel]:
         """
         Bridges channel_a to another target (e.g., endpoint, dialplan extension).
         This is now a wrapper around Channel.bridge for backward compatibility.
+        This method waits for the bridge to complete. To run in the background, use `asyncio.create_task()`.
 
         Args:
             channel_a: The A-leg channel to bridge from
             target: The bridge target string (e.g., 'user/1000', 'sofia/gateway/mygw/1234').
             call_variables: Optional dictionary of variables to set for the B-leg.
                             'origination_uuid' will be automatically added/overridden.
-            block: If True, wait for the bridge to complete (or fail).
-                   This typically means waiting for CHANNEL_EXECUTE_COMPLETE for the bridge app.
 
         Returns:
             A tuple containing:
@@ -396,9 +414,9 @@ class Session(Protocol):
             raise SessionGoneAway(f"Channel {channel_a.uuid} has been destroyed.")
             
         logger.info(f"Session: Using Channel.bridge method for channel [{channel_a.uuid}]")
-        return await channel_a.bridge(target, call_variables, block)
+        return await channel_a.bridge(target, call_variables)
         
-    async def unbridge(self, channel: Union[str, Channel], destination: Optional[str] = None, park: bool = True) -> CommandResult:
+    async def unbridge(self, channel: Union[str, Channel], destination: Optional[str] = None, park: bool = True) -> BackgroundJobResult:
         """
         Unbridges a channel from any connected channel and transfers it to a destination.
         
@@ -438,13 +456,17 @@ class Session(Protocol):
         file,
         minimal=0,
         maximum=128,
-        block=True,
         regexp: Optional[str] = None,
         var_name: Optional[str] = None,
         invalid_file: Optional[str] = None,
         digit_timeout: Optional[int] = None,
         transfer_on_failure: Optional[str] = None,
     ) -> CommandResult:
+        """
+        Executes the 'play_and_get_digits' application and waits for completion.
+
+        To run this in the background, use `asyncio.create_task()`.
+        """
         formatter = lambda value: "" if value is None else str(value)
         ordered_arguments = [
             minimal,
@@ -464,7 +486,7 @@ class Session(Protocol):
         logger.debug(f"Arguments used in play_and_get_digits command: {arguments}")
 
         return await self.sendmsg(
-            "execute", "play_and_get_digits", arguments, block=block
+            "execute", "play_and_get_digits", arguments
         )
         
     async def originate(

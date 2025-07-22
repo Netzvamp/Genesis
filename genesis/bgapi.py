@@ -15,87 +15,10 @@ from uuid import uuid4
 from .events import ESLEvent
 from .logger import logger
 from .exceptions import UnconnectedError, ConnectionError
+from .results import BackgroundJobResult
 
 if TYPE_CHECKING:
     from .protocol import Protocol
-
-
-class BackgroundJobResult:
-    """
-    Represents the result of a background job execution.
-    
-    This is a simpler alternative to CommandResult specifically for background jobs.
-    """
-    
-    def __init__(self, job_uuid: str, command: str):
-        """
-        Initialize a new background job result.
-        
-        Args:
-            job_uuid: The Job-UUID for tracking the job
-            command: The command that was executed
-        """
-        self.job_uuid = job_uuid
-        self.command = command
-        self.completion_event: Optional[ESLEvent] = None
-        self.exception: Optional[Exception] = None
-        self._complete = asyncio.Event()
-    
-    @property
-    def is_completed(self) -> bool:
-        """Returns True if the background job has completed."""
-        return self._complete.is_set()
-    
-    @property
-    def is_successful(self) -> bool:
-        """
-        Returns True if the job completed successfully.
-        Raises ValueError if the job hasn't completed yet.
-        """
-        if not self.is_completed:
-            raise ValueError("Background job hasn't completed yet")
-        return self.exception is None
-    
-    @property
-    def response(self) -> Optional[str]:
-        """
-        Returns the response body from the completed background job.
-        Returns None if the job hasn't completed.
-        """
-        if not self.is_completed or not self.completion_event:
-            return None
-        return getattr(self.completion_event, 'body', None)
-    
-    def set_complete(self, event: ESLEvent) -> None:
-        """Mark the background job as complete with the given event."""
-        self.completion_event = event
-        self._complete.set()
-        logger.debug(f"Background job {self.job_uuid} completed")
-    
-    def set_exception(self, exception: Exception) -> None:
-        """Mark the background job as failed with the given exception."""
-        self.exception = exception
-        self._complete.set()
-        logger.debug(f"Background job {self.job_uuid} failed with exception: {exception}")
-    
-    async def wait(self) -> 'BackgroundJobResult':
-        """
-        Wait for the background job to complete.
-        
-        Returns:
-            Self, for method chaining
-            
-        Raises:
-            The stored exception if the job failed
-        """
-        await self._complete.wait()
-        if self.exception:
-            raise self.exception
-        return self
-    
-    def __await__(self):
-        """Make the object awaitable directly."""
-        return self.wait().__await__()
 
 
 class BackgroundAPI:
