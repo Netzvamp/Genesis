@@ -3,18 +3,13 @@ import importlib
 from typing import Union
 from pathlib import Path
 
-from rich import print
-from rich.tree import Tree
-from rich.panel import Panel
-from rich.syntax import Syntax
-from rich.padding import Padding
 
 from genesis.logger import logger
 from genesis.cli.exceptions import CLIExcpetion
 
 
 def get_app_name(
-    cls: object, module_import_str: str, app_name: Union[str, None] = None
+    cls: type, module_import_str: str, app_name: Union[str, None] = None
 ) -> str:
     """Get the app name from the module."""
     try:
@@ -50,7 +45,7 @@ def get_app_name(
 
 
 def get_import_string(
-    cls: object, path: Union[Path, None] = None, app_name: Union[str, None] = None
+    cls: type, path: Union[Path, None] = None, app_name: Union[str, None] = None
 ) -> str:
     """Get the import string for the given module path."""
     if not path:
@@ -80,38 +75,7 @@ def get_import_string(
         else:
             break
 
-    root = module_paths[0]
-    name = f"🐍 {root.name}" if root.is_file() else f"📁 {root.name}"
-
-    tree = Tree(name)
-
-    if root.is_dir():
-        tree.add("[dim]🐍 __init__.py[/dim]")
-
-    tree = tree
-
-    for item in module_paths[1:]:
-        name = f"🐍 {item.name}" if item.is_file() else f"📁 {item.name}"
-        tree = tree.add(name)
-
-        if item.is_dir():
-            tree.add("[dim]🐍 __init__.py[/dim]")
-
-    title = "[b green]Module file[/b green]"
-
-    if len(module_paths) > 1 or module_path.is_dir():
-        title = "[b green]Package file structure[/b green]"
-
-    panel = Padding(
-        Panel(
-            tree,
-            title=title,
-            expand=False,
-            padding=(1, 2),
-        ),
-        1,
-    )
-    print(panel)
+    logger.info(f"Module structure: {' -> '.join(p.name for p in module_paths)}")
 
     module_import_str = ".".join(p.stem for p in module_paths)
 
@@ -123,20 +87,7 @@ def get_import_string(
 
     use_app_name = get_app_name(cls, module_import_str, app_name=app_name)
 
-    import_example = Syntax(f"from {module_import_str} import {use_app_name}", "python")
-
-    import_panel = Padding(
-        Panel(
-            import_example,
-            title=f"[b green]Importable {cls.__name__} app[/b green]",
-            expand=False,
-            padding=(1, 2),
-        ),
-        1,
-    )
-
-    logger.info(f"Found importable {cls.__name__} app")
-    print(import_panel)
+    logger.info(f"Importable app: from {module_import_str} import {use_app_name}")
 
     import_string = f"{module_import_str}:{use_app_name}"
     logger.info(f"Using import string [b green]{import_string}[/b green]")

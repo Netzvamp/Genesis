@@ -14,6 +14,7 @@ Genesis is a Python library designed to build asynchronous applications that int
 - **Asynchronous by Design:** Built with `asyncio` for high-performance, non-blocking I/O.
 - **Inbound, Outbound, and Consumer Modes:** Supports all major ESL modes for comprehensive FreeSWITCH integration.
 - **Decorator-Based Event Handling:** A simple and intuitive way to handle FreeSWITCH events.
+- **OpenTelemetry Support:** Built-in instrumentation for tracing connections and commands.
 - **Extensible and Customizable:** Easily extend and customize the library to fit your needs.
 
 ## Installation
@@ -70,7 +71,7 @@ async def handler(session):
     await session.playback('ivr/ivr-welcome')
     await session.hangup()
 
-app = Outbound("127.0.0.1", 5000, handler)
+app = Outbound(handler, "127.0.0.1", 5000)
 
 asyncio.run(app.start())
 ```
@@ -116,6 +117,13 @@ Please read our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE
             <img src=https://avatars.githubusercontent.com/u/4619406?v=4 width="100;"  style="border-radius:50%;align-items:center;justify-content:center;overflow:hidden;padding-top:10px" alt=RL/>
             <br />
             <sub style="font-size:14px"><b>RL</b></sub>
+        </a>
+    </td>
+    <td align="center" style="word-wrap: break-word; width: 150.0; height: 150.0">
+        <a href=https://github.com/nativegold>
+            <img src=https://avatars.githubusercontent.com/u/54573570?v=4 width="100;"  style="border-radius:50%;align-items:center;justify-content:center;overflow:hidden;padding-top:10px" alt=Dongwoon Kim/>
+            <br />
+            <sub style="font-size:14px"><b>Dongwoon Kim</b></sub>
         </a>
     </td>
 </tr>

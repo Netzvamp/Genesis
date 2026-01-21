@@ -5,16 +5,15 @@ import asyncio
 import logging
 
 import typer
-from rich import print
-from rich.panel import Panel
-from rich.padding import Padding
+
 
 from genesis.cli import watcher
 from genesis.logger import logger
 from genesis.outbound import Outbound
 from genesis.cli.exceptions import CLIExcpetion
-from genesis.cli.utils import complete_log_levels
+from genesis.cli.utils import complete_log_levels, get_log_level_map
 from genesis.cli.discover import get_import_string
+from genesis.types import WatcherProtocol
 
 
 outbound = typer.Typer(rich_markup_mode="rich")
@@ -51,10 +50,10 @@ def dev(
             envvar="ESL_LOG_LEVEL",
             show_default=True,
             case_sensitive=False,
-            autocompletion=complete_log_levels,
+            shell_complete=complete_log_levels,
         ),
     ] = "info",
-):
+) -> None:
     """
     Run a [bold]Outbound[/bold] genesis app in [yellow]development[/yellow] mode. 🧪
 
@@ -98,10 +97,10 @@ def run(
             envvar="ESL_LOG_LEVEL",
             show_default=True,
             case_sensitive=False,
-            autocompletion=complete_log_levels,
+            shell_complete=complete_log_levels,
         ),
     ] = "info",
-):
+) -> None:
     """
     Run a [bold]Outbound[/bold] genesis app in [green]production[/green] mode. 🚀
 
@@ -116,7 +115,7 @@ def run(
 
 async def _run_with_reload(app: Outbound, path: Path) -> None:
     loop = asyncio.get_running_loop()
-    queue = asyncio.Queue()
+    queue: asyncio.Queue = asyncio.Queue()
 
     async def consume(queue: asyncio.Queue) -> None:
         await app.start(block=False)
@@ -127,7 +126,7 @@ async def _run_with_reload(app: Outbound, path: Path) -> None:
                 logger.info("App stopped, restarting...")
                 await app.start(block=False)
 
-    observer = watcher.factory(path, queue, loop)
+    observer: WatcherProtocol = watcher.factory(path, queue, loop)
 
     observer.start()
     asyncio.run_coroutine_threadsafe(queue.put(None), loop)
@@ -143,7 +142,7 @@ async def _run_with_reload(app: Outbound, path: Path) -> None:
 
 
 def _run(
-    path: Union[Path, None] = None,
+    path: Path,
     host: str = "127.0.0.1",
     port: int = 9000,
     reload: bool = True,
@@ -153,31 +152,23 @@ def _run(
     try:
         import_string = get_import_string(Outbound, path=path, app_name=app)
 
-        panel = Panel(
-            f"[dim]Application address:[/dim] [link]esl://{host}:{port}[/link]",
-            title="Genesis Outbound app",
-            expand=False,
-            padding=(1, 2),
-            style="black on yellow" if reload else "green",
-        )
-
-        print(Padding(panel, 1))
+        logger.info(f"Outbound server started - Host: {host}, Port: {port}")
 
         module_str, attr_str = import_string.split(":")
         module = importlib.import_module(module_str)
-        app: Outbound = getattr(module, attr_str)
+        outbound_app: Outbound = getattr(module, attr_str)
 
-        app.host = host
-        app.port = port
+        outbound_app.host = host
+        outbound_app.port = port
 
         logger.info(f"Setting log level to [bold]{loglevel.upper()}[/bold]")
-        levels = logging.getLevelNamesMapping()
+        levels = get_log_level_map()
         logger.setLevel(levels.get(loglevel.upper(), logging.INFO))
 
         if reload:
-            asyncio.run(_run_with_reload(app, path))
+            asyncio.run(_run_with_reload(outbound_app, path))
         else:
-            asyncio.run(app.start())
+            asyncio.run(outbound_app.start())
 
     except CLIExcpetion as e:
         logger.error(e)
